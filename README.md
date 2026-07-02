@@ -15,9 +15,9 @@ Requires `numpy`, `scipy` (special functions and root finding in a few generator
 ## Quick start
 
 ```python
-from gratings import Grating, grating
+from gratings import Grating, Uniformgrating
 
-g = Grating(*grating(period=6.9, dc=0.5, padx=10000))  # 10 mm uniform grating, Λ = 6.9 µm, 50% duty cycle
+g = Uniformgrating(6.9, length=10000)  # 10 mm uniform grating, Λ = 6.9 µm, 50% duty cycle
 f = g.ftgrating(dp=0.1)     # QPM tuning curve: Wave of relative response vs Λ (µm)
 w = g.grating2wave()        # poling pattern as a plottable square wave
 g.bars2file('mask')         # write domain boundaries to mask.dat
@@ -26,7 +26,7 @@ g.bars2file('mask')         # write domain boundaries to mask.dat
 Transforms return new instances and chain left to right:
 
 ```python
-gg = ( Grating(*grating(30, 0.5, padx=10000))
+gg = ( Uniformgrating(30, length=10000)
        .apodizebars(apodize='asingauss', σ=0.23)  # Gaussian amplitude apodization via duty cycle
        .dropsmallbars(tolerance=0)
        .mergetouchingbars(tolerance=0)
@@ -38,7 +38,7 @@ gg = ( Grating(*grating(30, 0.5, padx=10000))
 
 ```python
 g = Grating(starts, ends)               # validates starts[n] < ends[n] < starts[n+1]
-g = Grating(starts, ends, length=10000) # optionally also validates 0 ≤ bars ≤ length
+g = Grating(starts, ends, length=10000) # device length, stored and inherited; g.isinbounds() tests 0 ≤ bars ≤ length
 starts, ends = g                        # unpacks, so f(*g) works with every module function
 g.starts, g.ends, g.bars                # bars = flat [s0,e0,s1,e1,...]
 len(g), g[i], g[i:j]                    # bar count, i-th bar as (start,end), slice as Grating
@@ -46,7 +46,9 @@ g.period                                # mean period estimate
 g & h, g | h                            # boolean AND/OR of two binary gratings
 ```
 
-`length` is the device (pad) length and is inherited through every transform; validation catches bars that leak outside the device mid-pipeline. Steps that legitimately produce degenerate intermediates (`expandbars`, `apodizebars`) construct with `validate=False` internally — the next validated step in the chain reports the problem.
+`Uniformgrating(period, dc=0.5, length=..., ...)` subclasses `Grating`, wrapping `grating()`: construction parameters are kept as attributes (`g.Λ`, `g.dc`, ...), `length` is always set, and `period` returns the exact design period rather than the base class's estimate from the bars. Transforms return plain `Grating`s, since a transformed uniform grating is no longer parametrically uniform.
+
+`length` is the device (pad) length and is inherited through every transform. Bars outside `[0, length]` are constructible — unconventional rather than invalid — and `g.isinbounds()` tests for them (e.g. duty-cycle apodization widens edge bars about fixed centers, past the pad; `grating()`'s ceil-based bar count can end the last bar past the pad). Validation at construction covers bar ordering only; steps that legitimately produce degenerate intermediates (`expandbars`, `apodizebars`) construct with `validate=False` internally, and the next validated step in the chain reports the problem.
 
 Every module-level function taking `(starts, ends)` as its first arguments has a corresponding method, same name, same defaults. The functional API remains fully supported; `f(*g)` and `g.f()` are interchangeable.
 
@@ -77,7 +79,7 @@ Every module-level function taking `(starts, ends)` as its first arguments has a
 
 ## Conventions
 
-- Positions in µm; bars are poled (inverted) domains, gaps unpoled
+- Positions typically in µm; bars are poled (inverted) domains, gaps unpoled
 - Bars are strictly ordered and non-overlapping; validation is on construction
 - Relative amplitude of a bar with duty cycle dc is sin(π·dc); a full-length 50%-dc grating has amplitude 1 = 2/π of the unpatterned nonlinearity
 - Default tolerances (1.0 µm) reflect what resolves lithographically while maintaining a resistive gap
