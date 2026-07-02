@@ -82,7 +82,6 @@ Every module-level function taking `(starts, ends)` as its first arguments has a
 - Positions typically in µm; bars are poled (inverted) domains, gaps unpoled
 - Bars are strictly ordered and non-overlapping; validation is on construction
 - Relative amplitude of a bar with duty cycle dc is sin(π·dc); a full-length 50%-dc grating has amplitude 1 = 2/π of the unpatterned nonlinearity
-- Default tolerances (1.0 µm) reflect what resolves lithographically while maintaining a resistive gap
 
 ## Tests
 
