@@ -105,14 +105,14 @@ def apodizebars(starts,ends,afunc=None,apodize=None,σ=0.23): # typical: afunc(0
     fp = (c-c[0])/(c[-1]-c[0])  # fp = fractionalposition
     w1 = w0*afunc(fp)           # new bar widths
     return c-w1/2,c+w1/2        # new starts,ends
-def mergetouchingbars(barstarts,barends,tolerance=1.0): # <1.0um won't resolve lithographically and maintain a resistive gap
+def mergetouchingbars(barstarts,barends,tolerance=0.0): # if <1.0um won't resolve lithographically, use tolerance=+1.0 to fill in nearly touching bars
     a,b = [barstarts[0]],[]
     for i in range(len(barstarts)-1):
         if barstarts[i+1]-barends[i]>tolerance: # if barstarts[i+1]!=barends[i]:
             a,b = a+[barstarts[i+1]],b+[barends[i]]
     b += [barends[-1]]
     return a,b
-def dropsmallbars(barstarts,barends,tolerance=1.0):
+def dropsmallbars(barstarts,barends,tolerance=0.0): # if <1.0um won't resolve lithographically, use tolerance=+1.0 to drop bars smaller than this
     a,b = [],[]
     for i in range(len(barstarts)):
         if barends[i]-barstarts[i]>tolerance:
@@ -151,7 +151,7 @@ def apodizebreakup(Λ,σ,dc,gx,defaulton,minbar):
     g = apodizebars(*grating(Λ,dc=dc,padx=gx),σ=σ,apodize='asingauss')
     gg = g if defaulton else invertbarsgaps(*g)
     return breakupbars(*gg,maxbar=2*minbar,gapsize=minbar)
-def kchirpgrating(p0,p1,dc,padx,padcount=1,gapx=0,phase=0,x0=0): # https://www.gaussianwaves.com/2014/07/chirp-signal-frequency-sweeping-fft-and-power-spectral-density/
+def kchirpgrating(p0,p1,dc,padx,padcount=1,gapx=0,phase=0): # https://www.gaussianwaves.com/2014/07/chirp-signal-frequency-sweeping-fft-and-power-spectral-density/
     assert 0==phase, 'phase not implemented'
     k0,k1 = 2*pi/p0,2*pi/p1
     barcount = int(padcount*padx*(k1+k0)/4/pi)
@@ -430,7 +430,7 @@ def phasegrating(g0,g1,n,x0=0,x1=None):
     if isvalid(bs):
         return gg
     return mergetouchingbars(*dropsmallbars(*gg,tolerance=0),tolerance=0)
-def flipgratingbars(signs,period): # note signed segments are length period/2
+def flipgratingbars(signs,period,tolerance): # note signed segments are length period/2
     def lacc(*args,**kwargs):
         from itertools import accumulate
         return list(accumulate(*args,**kwargs))
@@ -441,7 +441,7 @@ def flipgratingbars(signs,period): # note signed segments are length period/2
     barstarts = [z for z,sign0,sign1 in zip(zs,sign0s,sign1s) if sign0==+1 and sign1==-1]
     barends = [z for z,sign0,sign1 in zip(zs,sign0s,sign1s) if sign0==-1 and sign1==+1]
     assert barstarts==[z for z,sign0,sign1 in zip(zs,sign0s,sign1s) if sign0>sign1]
-    return mergetouchingbars(barstarts,barends)
+    return mergetouchingbars(barstarts,barends,tolerance=tolerance)
 def spectralcomb(g0,g1,offfraction,L=None): # removes all bars in middle: ■■____■■, L in µm
     L = L if L is not None else g1[-1]
     x0,x1 = (1-offfraction)*L/2,(1+offfraction)*L/2
@@ -592,9 +592,9 @@ class Grating: # bars defined by starts,ends; transforms return new instances, c
         s = f'Grating({f(self.starts)},{f(self.ends)}'
         return s + (f',length={self.length:g})' if self.length is not None else ')')
     ## transforms, return new Grating (length is inherited)
-    def mergetouchingbars(self,tolerance=1.0):
+    def mergetouchingbars(self,tolerance=0.0):
         return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length)
-    def dropsmallbars(self,tolerance=1.0):
+    def dropsmallbars(self,tolerance=0.0):
         return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length)
     def expandbars(self,op): # may create zero-width or overlapping bars, chain .dropsmallbars().mergetouchingbars()
         return Grating(*expandbars(*self,op),length=self.length,validate=False)
@@ -663,6 +663,30 @@ class Uniformgrating(Grating): # Grating that remembers its construction paramet
         s = ','.join(f'{k}={getattr(self,k)!r}' for k,d in defaults.items() if getattr(self,k)!=d)
         head = f'Uniformgrating({self.Λ:g},' + (f'{self.dc:g},' if self.dc!=0.5 else '') + f'length={self.length:g}'
         return head + (','+s if s else '') + ')'
+class Chirpedgrating(Grating): # Grating that remembers its construction parameters, wraps kchirpgrating()
+    def __init__(self, p0, p1, dc=0.5, length=None, gapx=0):
+        assert length is not None, 'length required'
+        self.p0, self.p1, self.dc, self.gapx = p0, p1, dc, gapx
+        super().__init__(*kchirpgrating(p0,p1,dc,padx=length,padcount=1,gapx=gapx),length=length)
+    @property
+    def period(self): # center-k design period = harmonic mean of p0,p1 = grating length/barcount
+        return 2*self.p0*self.p1/(self.p0+self.p1)
+    def __repr__(self):
+        head = f'Chirpedgrating({self.p0:g},{self.p1:g},' + (f'{self.dc:g},' if self.dc!=0.5 else '') + f'length={self.length:g}'
+        return head + (f',gapx={self.gapx:g}' if self.gapx else '') + ')'
+class Interleavedgrating(Grating): # Grating that remembers its construction parameters, wraps geometricinterleavedgrating()
+    def __init__(self, Λ1, Λ2, length=None, φ1=None, φ2=None):
+        assert length is not None, 'length required'
+        self.Λ1, self.Λ2 = Λ1, Λ2
+        self.φ1 = -length*pi/Λ1 if φ1 is None else φ1 # resolved defaults, bars symmetric about length/2
+        self.φ2 = -length*pi/Λ2 if φ2 is None else φ2
+        super().__init__(*geometricinterleavedgrating(Λ1,Λ2,length,φ1=self.φ1,φ2=self.φ2),length=length)
+    @property
+    def periods(self): # note: the base class period property (single-period estimate from the bars) is meaningless here
+        return (self.Λ1,self.Λ2)
+    def __repr__(self):
+        s = ','.join(f'{k}={v:g}' for k,v,d in [('φ1',self.φ1,-self.length*pi/self.Λ1),('φ2',self.φ2,-self.length*pi/self.Λ2)] if v!=d)
+        return f'Interleavedgrating({self.Λ1:g},{self.Λ2:g},length={self.length:g}' + (','+s if s else '') + ')'
 
 def classtests():
     g = Grating([0,2,4],[1,3,5])
@@ -709,6 +733,19 @@ def classtests():
     assert u.reverse().isvalid() and u.piphasegrating().isvalid()
     assert repr(u)=='Uniformgrating(100,length=2000)'
     assert repr(Uniformgrating(100,0.6,2000,x0=50))=='Uniformgrating(100,0.6,length=2000,x0=50)'
+    ## Chirpedgrating, Interleavedgrating tests
+    c = Chirpedgrating(14.45,14.55,length=51000)
+    assert c==Grating(*kchirpgrating(14.45,14.55,0.5,51000)) and c.length==51000 and c.p0==14.45
+    assert np.isclose(c.period, 2*14.45*14.55/(14.45+14.55)) # center-k period, harmonic mean
+    assert abs(Grating(*c).period - c.period)<0.01 # agrees with the base class bar-based estimate
+    assert isinstance(c.dropsmallbars(),Grating) and not isinstance(c.dropsmallbars(),Chirpedgrating)
+    assert repr(c)=='Chirpedgrating(14.45,14.55,length=51000)'
+    ii = Interleavedgrating(7,17,length=1000)
+    assert ii==Grating(*geometricinterleavedgrating(7,17,1000)) and ii.periods==(7,17) and ii.length==1000
+    assert np.isclose(Interleavedgrating(7,17,1000,φ1=0).φ1,0) and np.isclose(ii.φ1,-1000*pi/7)
+    assert isinstance(ii[1:],Grating) and not isinstance(ii[1:],Interleavedgrating)
+    assert repr(ii)=='Interleavedgrating(7,17,length=1000)'
+    assert repr(Interleavedgrating(7,17,1000,φ1=0))=='Interleavedgrating(7,17,length=1000,φ1=0)'
     print('classtests passed')
 
 if __name__ == '__main__':
