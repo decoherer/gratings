@@ -592,10 +592,14 @@ class Grating: # bars defined by starts,ends; transforms return new instances, c
         s = f'Grating({f(self.starts)},{f(self.ends)}'
         return s + (f',length={self.length:g})' if self.length is not None else ')')
     ## transforms, return new Grating (length is inherited)
-    def mergetouchingbars(self,tolerance=0.0):
-        return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length)
-    def dropsmallbars(self,tolerance=0.0):
-        return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length)
+    # def mergetouchingbars(self,tolerance=0.0):
+    #     return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length)
+    # def dropsmallbars(self,tolerance=0.0):
+    #     return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length)
+    def mergetouchingbars(self,tolerance=0.0,validate=True): # validate=False when input holds degenerate bars (e.g. overpole phantoms) that a later dropsmallbars removes
+        return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length,validate=validate)
+    def dropsmallbars(self,tolerance=0.0,validate=True):
+        return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length,validate=validate)
     def expandbars(self,op): # may create zero-width or overlapping bars, chain .dropsmallbars().mergetouchingbars()
         return Grating(*expandbars(*self,op),length=self.length,validate=False)
     def shrinkbars(self,dx):
@@ -687,6 +691,25 @@ class Interleavedgrating(Grating): # Grating that remembers its construction par
     def __repr__(self):
         s = ','.join(f'{k}={v:g}' for k,v,d in [('φ1',self.φ1,-self.length*pi/self.Λ1),('φ2',self.φ2,-self.length*pi/self.Λ2)] if v!=d)
         return f'Interleavedgrating({self.Λ1:g},{self.Λ2:g},length={self.length:g}' + (','+s if s else '') + ')'
+class Legacyinterleavedelectrode(Grating): # interleaved electrode bars as built by the legacy mask code (addinterleavedsubmount)
+    # note: interleavedgrating is deliberately called with (period1,period0), preserving the legacy argument order
+    def __init__(self, period0, period1, padcount=10, gx=2500, smallestbar=1, overpole=0, breakupgapsize=0, apodize=None):
+        self.period0, self.period1, self.padcount, self.gx = period0, period1, padcount, gx
+        self.smallestbar, self.overpole, self.breakupgapsize, self.apodize = smallestbar, overpole, breakupgapsize, apodize
+        g0 = interleavedgrating(period1,period0,padcount,gx) if apodize is None else apodizedinterleavedgrating(period1,period0,padcount,gx,apodize=apodize)
+        g = ( Grating(*g0,length=padcount*gx)
+              .shrinkbars(overpole)
+              .mergetouchingbars(tolerance=smallestbar,validate=False)
+              .dropsmallbars(tolerance=smallestbar)
+              .breakupgaps(maxgap=breakupgapsize,barsize=smallestbar) )
+        super().__init__(*g,length=padcount*gx)
+    @property
+    def periods(self):
+        return (self.period0,self.period1)
+    def __repr__(self):
+        defaults = dict(padcount=10,gx=2500,smallestbar=1,overpole=0,breakupgapsize=0,apodize=None)
+        s = ','.join(f'{k}={getattr(self,k)!r}' for k,d in defaults.items() if getattr(self,k)!=d)
+        return f'Legacyinterleavedelectrode({self.period0:g},{self.period1:g}' + (','+s if s else '') + ')'
 
 def classtests():
     g = Grating([0,2,4],[1,3,5])
@@ -746,6 +769,14 @@ def classtests():
     assert isinstance(ii[1:],Grating) and not isinstance(ii[1:],Interleavedgrating)
     assert repr(ii)=='Interleavedgrating(7,17,length=1000)'
     assert repr(Interleavedgrating(7,17,1000,φ1=0))=='Interleavedgrating(7,17,length=1000,φ1=0)'
+    ## validate kwarg on cleanup methods (overpole phantoms are benign mid-pipeline)
+    d = Grating([0,3.5,6],[2,3.7,8]).shrinkbars(0.6) # middle bar becomes a phantom (negative width)
+    try:
+        d.mergetouchingbars(tolerance=1); assert False, 'should have raised'
+    except AssertionError: pass
+    e = d.mergetouchingbars(tolerance=1,validate=False).dropsmallbars(tolerance=1)
+    assert e==Grating([0.3,6.3],[1.7,7.7])
+    assert np.isclose(e.starts[1]-e.ends[0],(6-2)+0.6) # final gap = original separation + overpole
     print('classtests passed')
 
 if __name__ == '__main__':

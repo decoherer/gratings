@@ -365,6 +365,22 @@ if __name__ == '__main__':
         Wave.plots(*[g.grating2wave().rename(i)+2*i for i,g in enumerate([g1,g2])],x='z (µm)',y='poling amplitude',scale=(2,1),grid=1,lw=1)
         Wave.plots(*[g.gratingamplitude(Λ1).rename(i) for i,g in enumerate([g0,g1,g2])],x='z (µm)',y='relative Λ1 amplitude',scale=(2,1),grid=1,lw=1)
         Wave.plots(*[g.gratingamplitude(Λ2).rename(i) for i,g in enumerate([g0,g1,g2])],x='z (µm)',y='relative Λ2 amplitude',scale=(2,1),grid=1,lw=1)
+    def legacyinterleavedelectrodetests():
+        from gratings import Grating,Legacyinterleavedelectrode,interleavedgrating,apodizedinterleavedgrating,shrinkbars,mergetouchingbars,dropsmallbars,breakupgaps
+        ## Legacyinterleavedelectrode tests
+        v = Legacyinterleavedelectrode(17.9,6.878,padcount=2,overpole=0.6)
+        b0,b1 = interleavedgrating(6.878,17.9,2,2500) # note legacy period order
+        b0,b1 = shrinkbars(b0,b1,dx=0.6)
+        b0,b1 = mergetouchingbars(b0,b1,tolerance=1)
+        b0,b1 = dropsmallbars(b0,b1,tolerance=1)
+        b0,b1 = breakupgaps(b0,b1,maxgap=0,barsize=1)
+        assert v==Grating(b0,b1) and v.length==5000 and v.periods==(17.9,6.878) and v.isvalid() and v.isinbounds()
+        assert min(b-a for a,b in zip(v.starts,v.ends))>1 and min(a-b for a,b in zip(v.starts[1:],v.ends[:-1]))>1 # smallestbar guarantees hold
+        assert isinstance(v.invertbarsgaps(),Grating) and not isinstance(v.invertbarsgaps(),Legacyinterleavedelectrode)
+        assert repr(v)=='Legacyinterleavedelectrode(17.9,6.878,padcount=2,overpole=0.6)'
+        va = Legacyinterleavedelectrode(17.9,6.878,padcount=1,apodize='tri')
+        assert va==Grating(*dropsmallbars(*mergetouchingbars(*apodizedinterleavedgrating(6.878,17.9,1,2500,apodize='tri'),tolerance=1),tolerance=1))
+        assert repr(va)=="Legacyinterleavedelectrode(17.9,6.878,padcount=1,apodize='tri')"
 
     # phasegratingtests() # ~1hr run time
     if 1:
@@ -380,3 +396,4 @@ if __name__ == '__main__':
         interleavedenhancementfactor()
         apodizedinterleavedtest()
         exactinterleavedtest()
+        legacyinterleavedelectrodetests()
