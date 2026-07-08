@@ -749,7 +749,6 @@ class Discreteinterleavedelectrode(Dualperiodgrating): # discreteapodizedinterle
         x0 = padcount*gx
         xeff = x0 if xeff is None else xeff
         σ = σ0*xeff/x0
-        print('σ',σ)
         self.period1, self.period2, self.xeff, self.A1, self.A2 = period1, period2, xeff, A1, A2
         self.padcount, self.gx, self.smallestbar, self.overpole, self.res, self.σ0 = padcount, gx, smallestbar, overpole, res, σ0
         g0 = discreteapodizedinterleavedgrating(period1,period2,x0,σ=σ,A1=A1,A2=A2,res=res)
@@ -760,13 +759,11 @@ class Geometricinterleavedelectrode(Dualperiodgrating):
         x0 = padcount*gx
         xeff = x0 if xeff is None else xeff
         σ = σ0*xeff/x0
-        print('σ',σ)
         self.period1, self.period2, self.xeff, self.A1, self.A2 = period1, period2, xeff, A1, A2
         self.padcount, self.gx, self.smallestbar, self.overpole, self.σ0 = padcount, gx, smallestbar, overpole, σ0
         g0 = geometricapodizedinterleavedgrating(period1,period2,x0,f1=A1,f2=A2,σ=σ)
         g = Grating(*g0,length=x0).shrinkbars(overpole).mergetouchingbars(tolerance=smallestbar,validate=0).dropsmallbars(tolerance=smallestbar).validate()
         super().__init__(*g,length=x0)
-
 
 def classtests():
     g = Grating([0,2,4],[1,3,5])
