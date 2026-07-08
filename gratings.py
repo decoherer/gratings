@@ -290,7 +290,8 @@ def discreteapodizedinterleavedgrating(period1,period2,gx,σ=0.23,res=0.1,A1=Non
         i += 1
         pole1 = ((area1[i-1] + abs(a1[i]) < t1[i] - 1) and 0<a1[i])
         pole2 = ((area2[i-1] + abs(a2[i]) < t2[i] - 1) and 0<a2[i])
-        pole = pole1 if abs(a1[i])>abs(a2[i]) else pole2
+        # pole = pole1 if abs(a1[i])>abs(a2[i]) else pole2
+        pole = pole1 if (t1[i]-area1[i-1])*abs(a1[i]) > (t2[i]-area2[i-1])*abs(a2[i]) else pole2
         polingsign = +1 if pole else -1
         yy[i] = 0.5*(polingsign+1)
         area1[i] = area1[i-1] + a1[i]*polingsign
@@ -346,12 +347,22 @@ def binaryor(g0, g1): # add two binary gratings (assuming bars are 1 and gaps ar
         else:
             ends[-1] = max(ends[-1],right)
     return starts,ends
-def geometricapodizedinterleavedgrating(Λ1,Λ2,gx,f1=None,f2=None,σ=None,x1=None,x2=None): # exact bars for sign( cos(2pi x/Λ1) + cos(2pi x/Λ2) )
-    def a(x): return np.exp( -0.5 * (x-0.5)**2  / σ**2 ) # 0 to 1 to 0
-    assert f1 is not None or σ is not None
-    f1 = f1 if f1 is not None else a
-    f2 = f2 if f2 is not None else f1
-    g1,g2 = apodizedgrating(Λ1,gx,f=f1,overfill=1), apodizedgrating(Λ2,gx,f=f2,overfill=1)
+def geometricapodizedinterleavedgrating(Λ1,Λ2,gx,f1=None,f2=None,σ=None,x1=None,x2=None): # exact bars for apodized sign( cos(2pi x/Λ1) + cos(2pi x/Λ2) )
+    # f1,f2 = target ACHIEVED amplitude per channel: a function of x/gx, or a constant multiplying the
+    # gaussian(σ) envelope (envelope peak = f, 0 ≤ f ≤ 2/π), defaulting to the max constant 2/π
+    def transferfunc(c): # achieved amplitude per channel vs requested amplitude, https://claude.ai/share/8c492cb1-b225-4345-b389-0e86126a6bb1
+        c = np.clip(np.asarray(c,dtype=float),0,1)
+        return c - 2/pi*( c*np.arcsin(c) + np.sqrt(1-c**2) - 1 )
+    def transferfuncinv(d):
+        xs = np.linspace(0,1,101)
+        return np.interp(d, transferfunc(xs), xs)
+    f1 = 2/pi if f1 is None else f1
+    f2 = f1 if f2 is None else f2
+    assert σ is not None or (callable(f1) and callable(f2)), 'σ required for constant f1,f2'
+    def target(f):
+        return f if callable(f) else lambda x,f=f: f * np.exp( -0.5 * (x-0.5)**2 / σ**2 )
+    r1,r2 = lambda x: transferfuncinv(target(f1)(x)), lambda x: transferfuncinv(target(f2)(x))
+    g1,g2 = apodizedgrating(Λ1,gx,f=r1,overfill=1), apodizedgrating(Λ2,gx,f=r2,overfill=1)
     h1,h2 = preferencegrating(Λ1,Λ2,gx,x1=x1,x2=x2),preferencegrating(Λ2,Λ1,gx,x1=x2,x2=x1)
     return binaryor( binaryand(g1,h1), binaryand(g2,h2) )
 def geometricinterleavedgrating(Λ1, Λ2, gx, φ1=None, φ2=None): # exact bars for sign( cos(2pi x/Λ1+φ1) + cos(2pi x/Λ2+φ2) )
@@ -522,7 +533,10 @@ def splitbarsalongperiodboundaries(starts,ends,Λ,x0): # x0 is phase, or the cen
         xs = [a] + [x0 + (k-0.5)*Λ for k in range(i+1,j+1)] + [b]
         newstarts,newends = newstarts + xs[:-1], newends + xs[1:]
     return newstarts,newends
-def gratingamplitude(starts,ends,Λ): # each point is the average strength over one period with max of 1
+def gratingamplitude(starts,ends,Λ,smooth=0): # each point is the average strength over one period with max of 1
+    if hasattr(Λ,'__iter__'):
+        assert not isinstance(Λ,str)
+        return [gratingamplitude(starts,ends,x,smooth=smooth) for x in Λ]
     from collections import defaultdict
     x0 = bestphase(starts,ends,Λ)
     n = int((ends[-1]-starts[0])//Λ)
@@ -538,7 +552,7 @@ def gratingamplitude(starts,ends,Λ): # each point is the average strength over 
         periodbars[periodbinindex(0.5*a+0.5*b)] += [(a,b)]
     def onshare(a,b): return (sin(2*pi*(b-x0)/Λ) - sin(2*pi*(a-x0)/Λ)) / (2*pi) * (pi/2) # onshare is the positive contribution to grating amplitude, multiply by pi/2 to normalize to 1 for the max response of one period
     shares = [sum(2*onshare(a,b) for a,b in periodbars[m + i - n//2]) for i in range(n)] # since the contribution of a whole poled or unpoled period is zero, the contribution of the gaps is equal to the contribution of the bars, hence factor of 2
-    return Wave(shares,periodcenters)
+    return Wave(shares,periodcenters) if smooth==0 else Wave(shares,periodcenters).smooth(smooth)
 
 
 class Grating: # bars defined by starts,ends; transforms return new instances, chainable
@@ -553,10 +567,17 @@ class Grating: # bars defined by starts,ends; transforms return new instances, c
     def isvalid(self):
         bs = self.bars
         return all(b0<b1 for b0,b1 in zip(bs[:-1],bs[1:]))
+    def validate(self):
+        assert self.isvalid(), 'bars must be strictly ordered: starts[n] < ends[n] < starts[n+1]'
+        return self
     def isinbounds(self): # True if all bars lie within [0,length], inclusive; vacuously True if length is None or no bars
         if self.length is None or not self.starts:
             return True
         return 0<=min(self.starts) and max(self.ends)<=self.length
+    @property
+    def barstarts(self): return self.starts
+    @property
+    def barends(self): return self.ends
     @property
     def bars(self): # [s0,e0,s1,e1,...]
         return grating2bars(self.starts,self.ends)
@@ -596,7 +617,7 @@ class Grating: # bars defined by starts,ends; transforms return new instances, c
     #     return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length)
     # def dropsmallbars(self,tolerance=0.0):
     #     return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length)
-    def mergetouchingbars(self,tolerance=0.0,validate=True): # validate=False when input holds degenerate bars (e.g. overpole phantoms) that a later dropsmallbars removes
+    def mergetouchingbars(self,tolerance=0.0,validate=True): # validate=False: won't create invalid bars, but can still pass them
         return Grating(*mergetouchingbars(*self,tolerance=tolerance),length=self.length,validate=validate)
     def dropsmallbars(self,tolerance=0.0,validate=True):
         return Grating(*dropsmallbars(*self,tolerance=tolerance),length=self.length,validate=validate)
@@ -644,13 +665,24 @@ class Grating: # bars defined by starts,ends; transforms return new instances, c
         return ftgrating(*self,p0=p0,dp=dp,normalize=normalize,amplitude=amplitude,res=res)
     def bestphase(self,Λ):
         return bestphase(*self,Λ)
-    def gratingamplitude(self,Λ):
-        return gratingamplitude(*self,Λ)
+    def gratingamplitude(self,Λ=None,**kwargs):
+        return gratingamplitude(*self,Λ if Λ is not None else self.Λ,**kwargs)
     def electrodegratingft(self):
         return electrodegratingft(*self)
     def bars2file(self,file):
         bars2file(file,self.bars)
         return self
+    def plot(self,**kwargs):
+        return self.grating2wave().plot(**kwargs)
+    def save(self,name,file):
+        def list2str(a,f='{:g}',sep=','): # e.g. print(list2str([1,2,3],f='{:.1f}',sep='#')) # 1.0#2.0#3.0
+            if 0==len(a): return '[]'
+            if hasattr(a[0],'__len__') and not isinstance(a[0],str):
+                aa = [f"({list2str(ai,f,sep=',')})" for ai in a]
+                return sep.join((len(aa)*['{}'])).format(*aa)
+            return '[' + sep.join((len(a)*[f])).format(*a) + ']'
+        with open(file,'a') as f:
+            f.write(f'barstarts{name},barends{name} = {list2str(self.barstarts)},{list2str(self.barends)}\n')
 
 class Uniformgrating(Grating): # Grating that remembers its construction parameters, wraps grating()
     # transforms and slices return plain Gratings: a transformed uniform grating is no longer parametrically uniform
@@ -667,7 +699,7 @@ class Uniformgrating(Grating): # Grating that remembers its construction paramet
         s = ','.join(f'{k}={getattr(self,k)!r}' for k,d in defaults.items() if getattr(self,k)!=d)
         head = f'Uniformgrating({self.Λ:g},' + (f'{self.dc:g},' if self.dc!=0.5 else '') + f'length={self.length:g}'
         return head + (','+s if s else '') + ')'
-class Chirpedgrating(Grating): # Grating that remembers its construction parameters, wraps kchirpgrating()
+class Chirpedgrating(Grating): # wraps kchirpgrating()
     def __init__(self, p0, p1, dc=0.5, length=None, gapx=0):
         assert length is not None, 'length required'
         self.p0, self.p1, self.dc, self.gapx = p0, p1, dc, gapx
@@ -678,38 +710,63 @@ class Chirpedgrating(Grating): # Grating that remembers its construction paramet
     def __repr__(self):
         head = f'Chirpedgrating({self.p0:g},{self.p1:g},' + (f'{self.dc:g},' if self.dc!=0.5 else '') + f'length={self.length:g}'
         return head + (f',gapx={self.gapx:g}' if self.gapx else '') + ')'
-class Interleavedgrating(Grating): # Grating that remembers its construction parameters, wraps geometricinterleavedgrating()
-    def __init__(self, Λ1, Λ2, length=None, φ1=None, φ2=None):
-        assert length is not None, 'length required'
-        self.Λ1, self.Λ2 = Λ1, Λ2
-        self.φ1 = -length*pi/Λ1 if φ1 is None else φ1 # resolved defaults, bars symmetric about length/2
-        self.φ2 = -length*pi/Λ2 if φ2 is None else φ2
-        super().__init__(*geometricinterleavedgrating(Λ1,Λ2,length,φ1=self.φ1,φ2=self.φ2),length=length)
+class Dualperiodgrating(Grating):
     @property
-    def periods(self): # note: the base class period property (single-period estimate from the bars) is meaningless here
-        return (self.Λ1,self.Λ2)
+    def periods(self):
+        return (self.period1,self.period2)
+    def gratingamplitude(self,Λ=None,**kwargs):
+        Λ = Λ if Λ is not None else self.periods
+        return gratingamplitude(*self,Λ,**kwargs)
+class Interleavedgrating(Dualperiodgrating): # wraps geometricinterleavedgrating()
+    def __init__(self, period1, period2, length=None, φ1=None, φ2=None):
+        assert length is not None, 'length required'
+        self.period1, self.period2 = period1, period2
+        self.φ1 = -length*pi/period1 if φ1 is None else φ1 # resolved defaults, bars symmetric about length/2
+        self.φ2 = -length*pi/period2 if φ2 is None else φ2
+        super().__init__(*geometricinterleavedgrating(period1,period2,length,φ1=self.φ1,φ2=self.φ2),length=length)
     def __repr__(self):
-        s = ','.join(f'{k}={v:g}' for k,v,d in [('φ1',self.φ1,-self.length*pi/self.Λ1),('φ2',self.φ2,-self.length*pi/self.Λ2)] if v!=d)
-        return f'Interleavedgrating({self.Λ1:g},{self.Λ2:g},length={self.length:g}' + (','+s if s else '') + ')'
-class Legacyinterleavedelectrode(Grating): # interleaved electrode bars as built by the legacy mask code (addinterleavedsubmount)
+        s = ','.join(f'{k}={v:g}' for k,v,d in [('φ1',self.φ1,-self.length*pi/self.period1),('φ2',self.φ2,-self.length*pi/self.period2)] if v!=d)
+        return f'Interleavedgrating({self.period1:g},{self.period2:g},length={self.length:g}' + (','+s if s else '') + ')'
+class Legacyinterleavedelectrode(Dualperiodgrating): # interleaved electrode bars as built by the legacy mask code (addinterleavedsubmount)
     # note: interleavedgrating is deliberately called with (period1,period0), preserving the legacy argument order
-    def __init__(self, period0, period1, padcount=10, gx=2500, smallestbar=1, overpole=0, breakupgapsize=0, apodize=None):
-        self.period0, self.period1, self.padcount, self.gx = period0, period1, padcount, gx
+    def __init__(self, period1, period2, padcount=8, gx=2500, smallestbar=1, overpole=0, breakupgapsize=0, apodize=None):
+        self.period1, self.period2, self.padcount, self.gx = period1, period2, padcount, gx
         self.smallestbar, self.overpole, self.breakupgapsize, self.apodize = smallestbar, overpole, breakupgapsize, apodize
-        g0 = interleavedgrating(period1,period0,padcount,gx) if apodize is None else apodizedinterleavedgrating(period1,period0,padcount,gx,apodize=apodize)
+        g0 = interleavedgrating(period2,period1,padcount,gx) if apodize is None else apodizedinterleavedgrating(period2,period1,padcount,gx,apodize=apodize)
         g = ( Grating(*g0,length=padcount*gx)
               .shrinkbars(overpole)
               .mergetouchingbars(tolerance=smallestbar,validate=False)
               .dropsmallbars(tolerance=smallestbar)
-              .breakupgaps(maxgap=breakupgapsize,barsize=smallestbar) )
+              .breakupgaps(maxgap=breakupgapsize,barsize=smallestbar)
+              .validate() )
         super().__init__(*g,length=padcount*gx)
-    @property
-    def periods(self):
-        return (self.period0,self.period1)
     def __repr__(self):
-        defaults = dict(padcount=10,gx=2500,smallestbar=1,overpole=0,breakupgapsize=0,apodize=None)
+        defaults = dict(padcount=8,gx=2500,smallestbar=1,overpole=0,breakupgapsize=0,apodize=None)
         s = ','.join(f'{k}={getattr(self,k)!r}' for k,d in defaults.items() if getattr(self,k)!=d)
-        return f'Legacyinterleavedelectrode({self.period0:g},{self.period1:g}' + (','+s if s else '') + ')'
+        return f'Legacyinterleavedelectrode({self.period1:g},{self.period2:g}' + (','+s if s else '') + ')'
+class Discreteinterleavedelectrode(Dualperiodgrating): # discreteapodizedinterleavedgrating
+    def __init__(self, period1, period2, xeff=None, A1=None, A2=None, padcount=8, gx=2500, smallestbar=1, overpole=0, res=0.1, σ0=0.23):
+        x0 = padcount*gx
+        xeff = x0 if xeff is None else xeff
+        σ = σ0*xeff/x0
+        print('σ',σ)
+        self.period1, self.period2, self.xeff, self.A1, self.A2 = period1, period2, xeff, A1, A2
+        self.padcount, self.gx, self.smallestbar, self.overpole, self.res, self.σ0 = padcount, gx, smallestbar, overpole, res, σ0
+        g0 = discreteapodizedinterleavedgrating(period1,period2,x0,σ=σ,A1=A1,A2=A2,res=res)
+        g = Grating(*g0,length=x0).shrinkbars(overpole).mergetouchingbars(tolerance=smallestbar,validate=0).dropsmallbars(tolerance=smallestbar).validate()
+        super().__init__(*g,length=x0)
+class Geometricinterleavedelectrode(Dualperiodgrating):
+    def __init__(self, period1, period2, xeff=None, A1=None, A2=None, padcount=8, gx=2500, smallestbar=1, overpole=0, σ0=0.23):
+        x0 = padcount*gx
+        xeff = x0 if xeff is None else xeff
+        σ = σ0*xeff/x0
+        print('σ',σ)
+        self.period1, self.period2, self.xeff, self.A1, self.A2 = period1, period2, xeff, A1, A2
+        self.padcount, self.gx, self.smallestbar, self.overpole, self.σ0 = padcount, gx, smallestbar, overpole, σ0
+        g0 = geometricapodizedinterleavedgrating(period1,period2,x0,f1=A1,f2=A2,σ=σ)
+        g = Grating(*g0,length=x0).shrinkbars(overpole).mergetouchingbars(tolerance=smallestbar,validate=0).dropsmallbars(tolerance=smallestbar).validate()
+        super().__init__(*g,length=x0)
+
 
 def classtests():
     g = Grating([0,2,4],[1,3,5])
